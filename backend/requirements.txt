@@ -1,0 +1,63 @@
+# ── Web Framework ─────────────────────────────────────────────────────────────
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.17
+
+# ── Database ──────────────────────────────────────────────────────────────────
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+psycopg2-binary==2.9.10
+
+# ── Auth & Security ────────────────────────────────────────────────────────────
+passlib[bcrypt]==1.7.4
+python-jose[cryptography]==3.3.0
+cryptography==43.0.3
+
+# ── Validation ────────────────────────────────────────────────────────────────
+pydantic==2.10.3
+pydantic-settings==2.6.1
+email-validator==2.2.0
+
+# ── LLM ───────────────────────────────────────────────────────────────────────
+anthropic==0.40.0
+
+# ── Queue / Workers ────────────────────────────────────────────────────────────
+celery[redis]==5.4.0
+redis==5.2.1
+kombu==5.4.2
+
+# ── HTTP / Scraping ────────────────────────────────────────────────────────────
+httpx==0.28.1
+beautifulsoup4==4.12.3
+lxml==5.3.0
+
+# ── Browser Automation ────────────────────────────────────────────────────────
+playwright==1.49.0
+
+# ── Email ─────────────────────────────────────────────────────────────────────
+imapclient==3.0.1
+google-auth==2.37.0
+google-auth-oauthlib==1.2.1
+google-api-python-client==2.155.0
+
+# ── LaTeX / PDF ───────────────────────────────────────────────────────────────
+pypdf==5.1.0
+latexcodec==3.0.0
+
+# ── Logging & Observability ────────────────────────────────────────────────────
+structlog==24.4.0
+prometheus-client==0.21.1
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-dotenv==1.0.1
+tenacity==9.0.0
+orjson==3.10.12
+aiofiles==24.1.0
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+pytest==8.3.4
+pytest-asyncio==0.24.0
+pytest-cov==6.0.0
+httpx==0.28.1
+factory-boy==3.3.1
