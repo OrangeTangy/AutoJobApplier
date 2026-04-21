@@ -82,18 +82,114 @@ async def _poll_source_async(source_id: uuid.UUID) -> None:
 
 
 async def _poll_imap_source(source, db) -> None:
-    """Poll IMAP for job-related emails."""
+    """Poll IMAP for job-related emails and ingest new jobs."""
+    from app.services.email_ingestion import poll_imap
     from app.utils.encryption import decrypt
 
-    config = source.config
-    password = decrypt(config.get("password", ""))
-    # Placeholder: real implementation uses imapclient to fetch unseen emails
-    logger.info("imap_poll_stub", source_id=str(source.id))
+    config = source.config or {}
+    host = config.get("host", "")
+    username = config.get("username", "")
+    password = decrypt(config.get("password", "")) if config.get("password") else ""
+    port = int(config.get("port", 993))
+    use_ssl = config.get("ssl", True)
+
+    if not host or not username or not password:
+        logger.warning("imap_source_missing_config", source_id=str(source.id))
+        return
+
+    job_dicts = await poll_imap(
+        host=host,
+        username=username,
+        password=password,
+        port=port,
+        use_ssl=use_ssl,
+        user_id=source.user_id,
+    )
+
+    imported = 0
+    for jd in job_dicts:
+        from sqlalchemy import select
+        from app.models.job import Job
+
+        existing = await db.execute(
+            select(Job).where(
+                Job.user_id == source.user_id,
+                Job.dedup_hash == jd["dedup_hash"],
+                Job.deleted_at.is_(None),
+            )
+        )
+        if existing.scalar_one_or_none():
+            continue
+
+        from datetime import datetime, timezone
+        job = Job(
+            user_id=source.user_id,
+            dedup_hash=jd["dedup_hash"],
+            raw_url=jd.get("raw_url"),
+            title=jd.get("title"),
+            company=jd.get("company"),
+            description=jd.get("description"),
+            status="new",
+            discovered_at=datetime.now(timezone.utc),
+        )
+        db.add(job)
+        await db.flush()
+        imported += 1
+
+    if imported:
+        await db.flush()
+    logger.info("imap_poll_complete", source_id=str(source.id), imported=imported)
 
 
 async def _poll_gmail_source(source, db) -> None:
-    """Poll Gmail via API for job-related emails."""
-    logger.info("gmail_poll_stub", source_id=str(source.id))
+    """Poll Gmail via Google API for job-related emails and ingest new jobs."""
+    from app.services.email_ingestion import poll_gmail
+    from app.utils.encryption import decrypt
+
+    config = source.config or {}
+    raw_token = config.get("oauth_token", "")
+    oauth_token = decrypt(raw_token) if raw_token else ""
+
+    if not oauth_token:
+        logger.warning("gmail_source_missing_token", source_id=str(source.id))
+        return
+
+    job_dicts = await poll_gmail(
+        oauth_token=oauth_token,
+        user_id=source.user_id,
+    )
+
+    imported = 0
+    for jd in job_dicts:
+        from sqlalchemy import select
+        from app.models.job import Job
+
+        existing = await db.execute(
+            select(Job).where(
+                Job.user_id == source.user_id,
+                Job.dedup_hash == jd["dedup_hash"],
+                Job.deleted_at.is_(None),
+            )
+        )
+        if existing.scalar_one_or_none():
+            continue
+
+        from datetime import datetime, timezone
+        job = Job(
+            user_id=source.user_id,
+            dedup_hash=jd["dedup_hash"],
+            raw_url=jd.get("raw_url"),
+            title=jd.get("title"),
+            company=jd.get("company"),
+            description=jd.get("description"),
+            status="new",
+            discovered_at=datetime.now(timezone.utc),
+        )
+        db.add(job)
+        await db.flush()
+        imported += 1
+
+    logger.info("gmail_poll_complete", source_id=str(source.id), imported=imported)
 
 
 @celery.task(
@@ -116,19 +212,25 @@ async def _prepare_draft_async(app_id: uuid.UUID, user_id: uuid.UUID) -> None:
     from sqlalchemy.orm import selectinload
 
     from app.database import AsyncSessionLocal
-    from app.models.application import Application
+    from app.models.application import Application, QuestionnaireAnswer
     from app.models.job import Job
     from app.models.resume import Resume
     from app.models.user import UserProfile
+    from app.services.cover_letter import generate_cover_letter
+    from app.services.questionnaire import generate_answers
+    from app.config import get_settings
+
+    cfg = get_settings()
 
     async with AsyncSessionLocal() as db:
-        app = await db.execute(
+        result = await db.execute(
             select(Application)
             .options(selectinload(Application.answers))
             .where(Application.id == app_id)
         )
-        app = app.scalar_one_or_none()
+        app = result.scalar_one_or_none()
         if not app:
+            logger.warning("draft_app_not_found", app_id=str(app_id))
             return
 
         job = await db.get(Job, app.job_id)
@@ -137,8 +239,65 @@ async def _prepare_draft_async(app_id: uuid.UUID, user_id: uuid.UUID) -> None:
         )
         profile = profile_result.scalar_one_or_none()
 
-        if profile and job:
-            logger.info("draft_prep_complete", app_id=str(app_id))
+        if not job or not profile:
+            logger.warning("draft_missing_job_or_profile", app_id=str(app_id))
+            return
+
+        # Choose LLM provider
+        llm = AnthropicProvider() if cfg.anthropic_api_key else MockProvider()
+
+        # 1. Generate questionnaire answers for all pending questions
+        questions = job.application_questions or []
+        if questions:
+            profile_data = {
+                "full_name": profile.full_name,
+                "work_authorization": profile.work_authorization,
+                "skills": profile.skills or [],
+                "work_history": profile.work_history or [],
+                "education": profile.education or [],
+                "desired_salary": profile.desired_salary,
+                "location": profile.location,
+            }
+            try:
+                answers = await generate_answers(questions, profile_data)
+                for ans in answers:
+                    qa = QuestionnaireAnswer(
+                        application_id=app_id,
+                        user_id=user_id,
+                        question_text=ans.question_text,
+                        question_type=ans.question_type,
+                        draft_answer=ans.draft_answer,
+                        confidence=ans.confidence,
+                        sources=ans.sources,
+                        rationale=ans.rationale,
+                        requires_review=ans.requires_review,
+                    )
+                    db.add(qa)
+            except Exception as exc:
+                logger.error("questionnaire_gen_failed", app_id=str(app_id), error=str(exc))
+
+        # 2. Generate cover letter
+        try:
+            job_data = {
+                "title": job.title,
+                "company": job.company,
+                "description": job.description,
+                "required_skills": job.required_skills or [],
+            }
+            profile_data = {
+                "full_name": profile.full_name,
+                "work_history": profile.work_history or [],
+                "education": profile.education or [],
+                "skills": profile.skills or [],
+            }
+            cover_result = await generate_cover_letter(job_data, profile_data)
+            app.cover_letter = cover_result.cover_letter
+        except Exception as exc:
+            logger.error("cover_letter_gen_failed", app_id=str(app_id), error=str(exc))
+
+        app.status = "ready_for_review"
+        await db.commit()
+        logger.info("draft_prep_complete", app_id=str(app_id))
 
 
 @celery.task(

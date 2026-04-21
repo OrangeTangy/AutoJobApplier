@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.models.application import Application
+from app.utils.robots import is_allowed
 from app.utils.security import compute_approval_hash
 
 logger = structlog.get_logger(__name__)
@@ -40,6 +41,10 @@ class VerificationRequired(RuntimeError):
     def __init__(self, challenge_type: str, message: str) -> None:
         self.challenge_type = challenge_type
         super().__init__(message)
+
+
+class SubmissionBlockedError(RuntimeError):
+    """Raised when submission is blocked by robots.txt or company rules."""
 
 
 # ── Challenge detection ────────────────────────────────────────────────────────
@@ -120,6 +125,13 @@ async def run_submission(
         url=job.application_url,
     )
 
+    # ── robots.txt safety check ────────────────────────────────────────────
+    allowed, robots_reason = await is_allowed(job.application_url)
+    if not allowed:
+        raise SubmissionBlockedError(
+            f"robots.txt disallows automated access: {robots_reason}"
+        )
+
     await write_audit(
         db,
         action="submission_started",
@@ -127,11 +139,13 @@ async def run_submission(
         user_id=application.user_id,
         resource_type="application",
         resource_id=application.id,
-        metadata={"url": job.application_url},
+        metadata={"url": job.application_url, "robots_ok": allowed},
     )
 
     try:
         from playwright.async_api import async_playwright
+
+        from app.services.submission.adapters import get_adapter
 
         screenshot_path: str | None = None
 
@@ -160,12 +174,15 @@ async def run_submission(
             # Build answer map
             answer_map = _build_answer_map(application)
 
-            # Fill form fields
-            filled = await _fill_form(page, answer_map)
-
-            # Upload resume PDF if available
-            if application.resume and application.resume.compiled_pdf_path:
-                await _upload_resume(page, application.resume.compiled_pdf_path)
+            # Use site-specific adapter
+            adapter = get_adapter(job.application_url)
+            resume_path = (
+                application.resume.compiled_pdf_path
+                if application.resume and application.resume.compiled_pdf_path
+                else None
+            )
+            result = await adapter.fill(page, answer_map, resume_path)
+            filled = result.fields_filled
 
             # Take screenshot BEFORE submitting
             storage = Path(settings.local_storage_path) / "screenshots"

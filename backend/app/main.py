@@ -11,7 +11,7 @@ from prometheus_client import Counter, Histogram, make_asgi_app
 
 from app.config import get_settings
 from app.database import engine
-from app.routers import applications, auth, ingestion, jobs, profile, resumes
+from app.routers import admin, applications, auth, company_rules, import_batch, ingestion, jobs, profile, resumes
 
 settings = get_settings()
 logger = structlog.get_logger(__name__)
@@ -76,6 +76,9 @@ def create_app() -> FastAPI:
     app.include_router(resumes.router, prefix=prefix)
     app.include_router(applications.router, prefix=prefix)
     app.include_router(ingestion.router, prefix=prefix)
+    app.include_router(company_rules.router, prefix=prefix)
+    app.include_router(import_batch.router, prefix=prefix)
+    app.include_router(admin.router, prefix=prefix)
 
     # ── Health endpoint ───────────────────────────────────────────────────────
     @app.get("/health", tags=["meta"])
