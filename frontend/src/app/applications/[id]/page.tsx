@@ -159,6 +159,21 @@ export default function ApplicationReviewPage() {
             </div>
           )}
 
+          {/* Cover letter */}
+          {app.cover_letter && (
+            <div className="mb-6">
+              <details className="group">
+                <summary className="cursor-pointer font-semibold text-gray-900 flex items-center gap-2 select-none">
+                  <span className="text-sm text-gray-400 group-open:rotate-90 transition-transform inline-block">▶</span>
+                  Cover Letter
+                </summary>
+                <div className="mt-3 p-4 bg-gray-50 rounded-lg border border-gray-200 text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">
+                  {app.cover_letter}
+                </div>
+              </details>
+            </div>
+          )}
+
           {/* Questionnaire */}
           <div className="space-y-4">
             <h2 className="font-semibold text-gray-900">

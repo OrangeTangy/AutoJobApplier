@@ -78,6 +78,38 @@ async def list_sources(
     return list(result.scalars().all())
 
 
+class SourceUpdate(BaseModel):
+    is_active: bool | None = None
+    display_name: str | None = None
+
+
+@router.patch("/sources/{source_id}", response_model=SourceOut)
+async def update_source(
+    source_id: uuid.UUID,
+    body: SourceUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> IngestionSource:
+    """Toggle active state or rename a source."""
+    result = await db.execute(
+        select(IngestionSource).where(
+            IngestionSource.id == source_id,
+            IngestionSource.user_id == current_user.id,
+        )
+    )
+    source = result.scalar_one_or_none()
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    if body.is_active is not None:
+        source.is_active = body.is_active
+    if body.display_name is not None:
+        source.display_name = body.display_name
+
+    await db.flush()
+    return source
+
+
 @router.delete("/sources/{source_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_source(
     source_id: uuid.UUID,
