@@ -133,9 +133,11 @@ export interface Application {
   id: string;
   job_id: string;
   resume_id?: string;
+  cover_letter?: string;
   status: ApplicationStatus;
   approved_at?: string;
   submitted_at?: string;
+  submission_error?: string;
   outcome?: string;
   user_notes?: string;
   created_at: string;

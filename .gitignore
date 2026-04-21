@@ -68,3 +68,10 @@ logs/
 # ── Playwright ────────────────────────────────────────────────────────────────
 playwright-report/
 test-results/
+
+# ── Claude Code ───────────────────────────────────────────────────────────────
+.claude/settings.local.json
+
+# ── Celery ────────────────────────────────────────────────────────────────────
+celerybeat-schedule
+celerybeat.pid

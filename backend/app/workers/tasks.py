@@ -98,12 +98,12 @@ async def _poll_imap_source(source, db) -> None:
         return
 
     job_dicts = await poll_imap(
+        source_id=source.id,
+        user_id=source.user_id,
         host=host,
+        port=port,
         username=username,
         password=password,
-        port=port,
-        use_ssl=use_ssl,
-        user_id=source.user_id,
     )
 
     imported = 0
@@ -155,8 +155,9 @@ async def _poll_gmail_source(source, db) -> None:
         return
 
     job_dicts = await poll_gmail(
-        oauth_token=oauth_token,
+        source_id=source.id,
         user_id=source.user_id,
+        oauth_token=oauth_token,
     )
 
     imported = 0
@@ -274,9 +275,9 @@ async def _prepare_draft_async(app_id: uuid.UUID, user_id: uuid.UUID) -> None:
                 "skills": profile.skills or [],
                 "work_history": profile.work_history or [],
                 "education": profile.education or [],
-                "desired_salary": profile.desired_salary,
-                "desired_salary_min": profile.desired_salary,
-                "desired_salary_max": profile.desired_salary,
+                "desired_salary": profile.desired_salary_min,
+                "desired_salary_min": profile.desired_salary_min,
+                "desired_salary_max": profile.desired_salary_max,
                 "salary_currency": "USD",
                 "earliest_start_date": getattr(profile, "earliest_start_date", ""),
                 "location": profile.location,

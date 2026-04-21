@@ -60,8 +60,15 @@ services:
     command: >
       sh -c "alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
 
   # ── Celery Worker ───────────────────────────────────────────────────────────
+  # Waits for backend (which runs migrations) to be healthy before starting.
   worker:
     build:
       context: ./backend
@@ -73,7 +80,7 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
     depends_on:
       backend:
-        condition: service_started
+        condition: service_healthy
       redis:
         condition: service_healthy
     volumes:
@@ -96,7 +103,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://${DB_USER:-postgres}:${DB_PASSWORD}@db:5432/${DB_NAME:-autojobapplier}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
     depends_on:
-      - worker
+      backend:
+        condition: service_healthy
     volumes:
       - ./backend:/app
     command: >
@@ -117,7 +125,8 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     volumes:
       - ./frontend/src:/app/src
       - ./frontend/public:/app/public
