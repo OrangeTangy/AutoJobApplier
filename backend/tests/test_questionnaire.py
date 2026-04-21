@@ -54,16 +54,16 @@ def test_sensitive_types_include_key_categories():
     assert "demographic" in SENSITIVE_TYPES
 
 
-@pytest.mark.asyncio
-async def test_generate_answers_uses_mock():
-    """generate_answers uses MockProvider when no API key is set."""
+def test_generate_answers_from_profile():
+    """generate_answers fills directly from profile — no API call needed."""
     questions = [
         {"question_text": "Are you authorized to work in the US?", "question_type": "work_authorization"},
         {"question_text": "What is your expected salary?", "question_type": "salary"},
+        {"question_text": "Will you require visa sponsorship?", "question_type": "sponsorship"},
     ]
     profile = {
         "full_name": "Jane Doe",
-        "work_authorization": "citizen",
+        "work_authorization": "US Citizen",
         "requires_sponsorship": False,
         "desired_salary_min": 120000,
         "desired_salary_max": 150000,
@@ -73,10 +73,21 @@ async def test_generate_answers_uses_mock():
         "education": [],
         "work_history": [],
         "skills": ["Python", "TypeScript"],
-        "custom_qa_defaults": {},
     }
-    answers = await generate_answers(questions, profile)
+    answers = generate_answers(questions, profile)
     assert isinstance(answers, list)
+    assert len(answers) == 3
+
+    # Work authorization pulled from profile
+    auth_ans = next(a for a in answers if a.question_type == "work_authorization")
+    assert "US Citizen" in auth_ans.draft_answer
+    assert auth_ans.requires_review is True   # Always review auth
+
+    # Sponsorship derived from flag
+    spon_ans = next(a for a in answers if a.question_type == "sponsorship")
+    assert "not require" in spon_ans.draft_answer.lower()
+    assert spon_ans.requires_review is True
+
     # All sensitive types should require review
     for answer in answers:
         if answer.question_type in SENSITIVE_TYPES:

@@ -19,7 +19,6 @@ import structlog
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
-from app.services.llm import get_llm_provider
 from app.utils.latex import ParsedResume, parse_latex_resume
 
 logger = structlog.get_logger(__name__)
@@ -166,31 +165,17 @@ async def tailor_resume(
     job_data: dict,
     user_id: str,
 ) -> TailoringResult:
-    """Main entry point: tailor a LaTeX resume for a specific job."""
-    parsed = parse_latex_resume(latex_source)
-    provider = get_llm_provider()
-    prompt = _build_tailor_prompt(parsed, job_data)
+    """
+    Resume tailoring — currently returns the source unchanged.
 
-    llm_output = await provider.complete_structured(
-        prompt,
-        LLMTailoringOutput,
-        system=_TAILOR_SYSTEM,
-        max_tokens=3000,
-        temperature=0.1,
-    )
-
-    tailored_latex = _apply_edits(latex_source, llm_output.edits)
-
-    logger.info(
-        "resume_tailored",
-        edits=len(llm_output.edits),
-        model=provider.model_name,
-        user_id=user_id,
-    )
-
+    In the library-matching model the best pre-made resume is selected
+    automatically, so no per-job tailoring is applied. This function is
+    retained for future use (e.g. if an LLM key is configured).
+    """
+    logger.info("tailor_resume_passthrough", user_id=user_id)
     return TailoringResult(
-        tailored_latex=tailored_latex,
-        edits=llm_output.edits,
-        sections_reordered=llm_output.sections_reordered,
-        rationale_summary=llm_output.rationale_summary,
+        tailored_latex=latex_source,
+        edits=[],
+        sections_reordered=[],
+        rationale_summary="No tailoring applied — library resume used as-is.",
     )

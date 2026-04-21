@@ -310,7 +310,7 @@ async def _generate_questionnaire_async(
             profile = profile_result.scalar_one_or_none()
             profile_data = profile.__dict__ if profile else {}
 
-            answers = await generate_answers(questions, profile_data)
+            answers = generate_answers(questions, profile_data)
 
             for draft in answers:
                 qa = QuestionnaireAnswer(

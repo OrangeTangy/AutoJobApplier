@@ -112,7 +112,7 @@ async def _parse_and_score_job(job_id: uuid.UUID, url: str, user_id: str) -> Non
             )
             profile = profile_result.scalar_one_or_none()
             if profile:
-                fit = await score_job_fit(
+                fit = score_job_fit(
                     job_data={
                         "title": job.title,
                         "company": job.company,

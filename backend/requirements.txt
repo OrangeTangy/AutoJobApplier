@@ -19,8 +19,12 @@ pydantic==2.10.3
 pydantic-settings==2.6.1
 email-validator==2.2.0
 
-# ── LLM ───────────────────────────────────────────────────────────────────────
-anthropic==0.40.0
+# ── Resume matching (TF-IDF, no external API needed) ─────────────────────────
+scikit-learn==1.5.2
+scipy==1.14.1
+
+# ── LLM (optional — not required for core functionality) ─────────────────────
+# anthropic==0.40.0   # Uncomment only if you want LLM-based cover letters
 
 # ── Queue / Workers ────────────────────────────────────────────────────────────
 celery[redis]==5.4.0

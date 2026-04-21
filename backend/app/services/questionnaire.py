@@ -1,8 +1,12 @@
 """
-Questionnaire assistant.
+Questionnaire assistant — no LLM required.
 
-Classifies application questions and generates grounded answers
-from the user's profile. Sensitive questions are flagged for mandatory review.
+Classifies application questions by type, then fills answers directly from
+the user's profile. Sensitive questions are always flagged for mandatory
+human review before approval.
+
+No API key needed. All answers are grounded in the stored profile — nothing
+is fabricated.
 """
 from __future__ import annotations
 
@@ -11,8 +15,6 @@ from typing import Any
 
 import structlog
 from pydantic import BaseModel, Field
-
-from app.services.llm import get_llm_provider
 
 logger = structlog.get_logger(__name__)
 
@@ -72,22 +74,6 @@ class AnswerBatch(BaseModel):
     answers: list[AnswerDraft] = Field(default_factory=list)
 
 
-_ANSWER_SYSTEM = """You are a job application assistant. Generate honest, grounded answers
-to application questions based ONLY on the provided candidate profile.
-
-Rules:
-1. NEVER fabricate or exaggerate qualifications, skills, dates, or status
-2. For work_authorization: use ONLY the exact authorization status from the profile
-3. For demographic questions: note that these are voluntary; suggest "Prefer not to disclose"
-   if no preference is set in the profile
-4. Cite the source field (e.g., "user_profile.work_authorization") for each answer
-5. Mark confidence:
-   - high: answer is directly stated in profile
-   - medium: answer can be inferred from profile with reasonable certainty
-   - low: answer requires assumption or is ambiguous
-6. Set requires_review=true for: work_authorization, sponsorship, demographic, salary questions"""
-
-
 def classify_question_type(question_text: str) -> str:
     text_lower = question_text.lower()
     for q_type, patterns in QUESTION_TYPE_PATTERNS:
@@ -97,70 +83,204 @@ def classify_question_type(question_text: str) -> str:
     return "short_answer"
 
 
-def _build_answer_prompt(questions: list[dict], profile: dict) -> str:
-    q_list = "\n".join(
-        f"{i+1}. [{q.get('question_type','unknown')}] {q['question_text']}"
-        for i, q in enumerate(questions)
-    )
-    return f"""Generate answers for these application questions.
-
-<candidate_profile>
-Full Name: {profile.get('full_name', '')}
-Work Authorization: {profile.get('work_authorization', 'unknown')}
-Requires Sponsorship: {profile.get('requires_sponsorship', False)}
-Willing to Relocate: {profile.get('willing_to_relocate', False)}
-Target Locations: {profile.get('target_locations', [])}
-Desired Salary: {profile.get('desired_salary_min')}–{profile.get('desired_salary_max')} {profile.get('salary_currency','USD')}
-Earliest Start Date: {profile.get('earliest_start_date', 'flexible')}
-Education: {profile.get('education', [])}
-Work History: {profile.get('work_history', [])}
-Skills: {profile.get('skills', [])}
-Custom Defaults: {profile.get('custom_qa_defaults', {})}
-</candidate_profile>
-
-<questions>
-{q_list}
-</questions>
-
-Return JSON with "answers" array. Each element must include:
-question_text, question_type, draft_answer, confidence, requires_review, sources (list of profile field paths), rationale."""
-
-
-async def generate_answers(
+def generate_answers(
     questions: list[dict[str, Any]],
     profile: dict[str, Any],
 ) -> list[AnswerDraft]:
-    """Generate draft answers for a list of application questions."""
+    """
+    Generate draft answers from the user's profile — no LLM required.
+
+    For well-known question types (work auth, sponsorship, relocation, salary,
+    start date), answers are pulled directly from profile fields with high
+    confidence. Unknown questions get an empty draft flagged for human review.
+    """
     if not questions:
         return []
 
-    # Classify question types if not already set
+    answers: list[AnswerDraft] = []
+
     for q in questions:
-        if not q.get("question_type") or q["question_type"] == "unknown":
-            q["question_type"] = classify_question_type(q.get("question_text", ""))
+        text = q.get("question_text", "")
+        q_type = q.get("question_type") or classify_question_type(text)
+        if q_type == "unknown":
+            q_type = classify_question_type(text)
 
-    provider = get_llm_provider()
-    prompt = _build_answer_prompt(questions, profile)
-
-    try:
-        batch = await provider.complete_structured(
-            prompt, AnswerBatch, system=_ANSWER_SYSTEM, max_tokens=3000, temperature=0.1
+        draft, confidence, sources, rationale, requires_review = _fill_from_profile(
+            q_type, profile
         )
-        answers = batch.answers
 
-        # Enforce review flags for sensitive types regardless of LLM output
-        for answer in answers:
-            if answer.question_type in SENSITIVE_TYPES:
-                answer.requires_review = True
+        # Sensitive types ALWAYS require human review regardless of confidence
+        if q_type in SENSITIVE_TYPES:
+            requires_review = True
 
-        logger.info(
-            "answers_generated",
-            count=len(answers),
-            requiring_review=sum(1 for a in answers if a.requires_review),
-            model=provider.model_name,
-        )
-        return answers
+        answers.append(AnswerDraft(
+            question_text=text,
+            question_type=q_type,
+            draft_answer=draft,
+            confidence=confidence,
+            requires_review=requires_review,
+            sources=sources,
+            rationale=rationale,
+        ))
 
-    except Exception as exc:
-        logger.error("answer_generation_failed", error=str(exc))
-        raise
+    req_review = sum(1 for a in answers if a.requires_review)
+    logger.info(
+        "answers_generated_from_profile",
+        count=len(answers),
+        requiring_review=req_review,
+        auto_filled=len(answers) - req_review,
+    )
+    return answers
+
+
+def _fill_from_profile(
+    q_type: str,
+    profile: dict,
+) -> tuple[str, str, list[str], str, bool]:
+    """
+    Returns (draft_answer, confidence, sources, rationale, requires_review).
+    """
+    match q_type:
+        case "work_authorization":
+            val = profile.get("work_authorization", "")
+            if val:
+                return (
+                    val, "high",
+                    ["profile.work_authorization"],
+                    "Pulled directly from your profile work authorization field.",
+                    True,   # Always review — legal / truthfulness critical
+                )
+            return ("", "low", [], "Work authorization not set in profile.", True)
+
+        case "sponsorship":
+            needs = profile.get("requires_sponsorship")
+            if needs is True:
+                answer = "Yes, I will require visa sponsorship."
+            elif needs is False:
+                answer = "No, I do not require visa sponsorship."
+            else:
+                answer = ""
+            if answer:
+                return (
+                    answer, "high",
+                    ["profile.requires_sponsorship"],
+                    "Derived from requires_sponsorship flag in your profile.",
+                    True,
+                )
+            return ("", "low", [], "Sponsorship requirement not set in profile.", True)
+
+        case "relocation":
+            willing = profile.get("willing_to_relocate")
+            targets = profile.get("target_locations") or []
+            if willing is True:
+                answer = "Yes, I am willing to relocate."
+                if targets:
+                    answer += f" My preferred locations are: {', '.join(targets)}."
+            elif willing is False:
+                answer = "No, I am not currently open to relocation."
+            else:
+                answer = ""
+            if answer:
+                return (
+                    answer, "high",
+                    ["profile.willing_to_relocate", "profile.target_locations"],
+                    "Derived from relocation preferences in your profile.",
+                    False,
+                )
+            return ("", "low", [], "Relocation preference not set in profile.", True)
+
+        case "salary":
+            sal = profile.get("desired_salary")
+            sal_min = profile.get("desired_salary_min")
+            sal_max = profile.get("desired_salary_max")
+            currency = profile.get("salary_currency", "USD")
+            if sal_min and sal_max:
+                answer = f"{currency} {sal_min:,} – {sal_max:,} per year"
+            elif sal:
+                answer = f"{currency} {sal:,} per year"
+            else:
+                answer = ""
+            if answer:
+                return (
+                    answer, "high",
+                    ["profile.desired_salary"],
+                    "Pulled from desired salary range in your profile.",
+                    True,  # Always review salary
+                )
+            return ("", "low", [], "Desired salary not set in profile.", True)
+
+        case "start_date":
+            start = profile.get("earliest_start_date", "")
+            if start:
+                return (
+                    f"I am available to start on or after {start}.",
+                    "high",
+                    ["profile.earliest_start_date"],
+                    "Pulled from earliest start date in your profile.",
+                    False,
+                )
+            return (
+                "I am flexible and can discuss a start date.",
+                "medium",
+                [],
+                "No specific start date in profile — generic flexible response.",
+                False,
+            )
+
+        case "years_experience":
+            work_history = profile.get("work_history") or []
+            years = _estimate_years(work_history)
+            if years > 0:
+                return (
+                    f"I have approximately {years} years of relevant experience.",
+                    "medium",
+                    ["profile.work_history"],
+                    "Estimated from work history entries in your profile.",
+                    False,
+                )
+            return ("", "low", [], "Work history empty in profile.", True)
+
+        case "education":
+            edu = profile.get("education") or []
+            if edu:
+                top = edu[0]
+                answer = f"{top.get('degree','')} in {top.get('field','')} from {top.get('institution','')} ({top.get('graduation_year','')})".strip()
+                if len(answer) > 10:
+                    return (
+                        answer, "high",
+                        ["profile.education"],
+                        "Pulled from education entries in your profile.",
+                        False,
+                    )
+            return ("", "low", [], "Education not set in profile.", True)
+
+        case "demographic":
+            return (
+                "I prefer not to disclose.",
+                "high",
+                [],
+                "Demographic questions are voluntary. Defaulting to 'prefer not to disclose'.",
+                True,  # Always review demographic
+            )
+
+        case "yes_no":
+            return ("", "low", [], "Yes/No question — please answer manually.", True)
+
+        case _:
+            # short_answer, multiple_choice, unknown
+            return ("", "low", [], "Open-ended question — please fill in manually.", True)
+
+
+def _estimate_years(work_history: list[dict]) -> int:
+    import datetime
+    now = datetime.date.today().year
+    total = 0
+    for entry in work_history:
+        try:
+            start = int(str(entry.get("start_date", ""))[:4])
+            end_raw = str(entry.get("end_date", ""))
+            end = now if not end_raw or "present" in end_raw.lower() else int(end_raw[:4])
+            total += max(0, end - start)
+        except (ValueError, TypeError):
+            pass
+    return total

@@ -208,19 +208,21 @@ def prepare_application_draft(self, application_id: str, user_id: str):
 
 
 async def _prepare_draft_async(app_id: uuid.UUID, user_id: uuid.UUID) -> None:
+    """
+    Prepare a draft application without any LLM:
+    1. Find the best-matching resume from the user's library (TF-IDF)
+    2. Generate questionnaire answers directly from profile fields
+    3. Advance status to ready_for_review
+    """
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
 
     from app.database import AsyncSessionLocal
     from app.models.application import Application, QuestionnaireAnswer
     from app.models.job import Job
-    from app.models.resume import Resume
     from app.models.user import UserProfile
-    from app.services.cover_letter import generate_cover_letter
     from app.services.questionnaire import generate_answers
-    from app.config import get_settings
-
-    cfg = get_settings()
+    from app.services.resume_matcher import get_best_resume
 
     async with AsyncSessionLocal() as db:
         result = await db.execute(
@@ -243,57 +245,56 @@ async def _prepare_draft_async(app_id: uuid.UUID, user_id: uuid.UUID) -> None:
             logger.warning("draft_missing_job_or_profile", app_id=str(app_id))
             return
 
-        # Choose LLM provider
-        llm = AnthropicProvider() if cfg.anthropic_api_key else MockProvider()
+        # 1. Auto-select best matching resume from library
+        job_text = f"{job.title or ''} {job.company or ''} {job.description or ''} " \
+                   f"{' '.join(job.required_skills or [])} {' '.join(job.preferred_skills or [])}"
 
-        # 1. Generate questionnaire answers for all pending questions
+        best_resume, match_score, matched_terms = await get_best_resume(db, user_id, job_text)
+        if best_resume:
+            app.resume_id = best_resume.id
+            logger.info(
+                "resume_auto_selected",
+                app_id=str(app_id),
+                resume=best_resume.name,
+                match_score=match_score,
+                matched_terms=matched_terms[:5],
+            )
+        else:
+            logger.warning("no_library_resume_found", app_id=str(app_id))
+
+        # 2. Generate questionnaire answers from profile (no LLM)
         questions = job.application_questions or []
         if questions:
             profile_data = {
                 "full_name": profile.full_name,
                 "work_authorization": profile.work_authorization,
+                "requires_sponsorship": profile.requires_sponsorship,
+                "willing_to_relocate": profile.willing_to_relocate,
+                "target_locations": profile.target_locations or [],
                 "skills": profile.skills or [],
                 "work_history": profile.work_history or [],
                 "education": profile.education or [],
                 "desired_salary": profile.desired_salary,
+                "desired_salary_min": profile.desired_salary,
+                "desired_salary_max": profile.desired_salary,
+                "salary_currency": "USD",
+                "earliest_start_date": getattr(profile, "earliest_start_date", ""),
                 "location": profile.location,
             }
-            try:
-                answers = await generate_answers(questions, profile_data)
-                for ans in answers:
-                    qa = QuestionnaireAnswer(
-                        application_id=app_id,
-                        user_id=user_id,
-                        question_text=ans.question_text,
-                        question_type=ans.question_type,
-                        draft_answer=ans.draft_answer,
-                        confidence=ans.confidence,
-                        sources=ans.sources,
-                        rationale=ans.rationale,
-                        requires_review=ans.requires_review,
-                    )
-                    db.add(qa)
-            except Exception as exc:
-                logger.error("questionnaire_gen_failed", app_id=str(app_id), error=str(exc))
-
-        # 2. Generate cover letter
-        try:
-            job_data = {
-                "title": job.title,
-                "company": job.company,
-                "description": job.description,
-                "required_skills": job.required_skills or [],
-            }
-            profile_data = {
-                "full_name": profile.full_name,
-                "work_history": profile.work_history or [],
-                "education": profile.education or [],
-                "skills": profile.skills or [],
-            }
-            cover_result = await generate_cover_letter(job_data, profile_data)
-            app.cover_letter = cover_result.cover_letter
-        except Exception as exc:
-            logger.error("cover_letter_gen_failed", app_id=str(app_id), error=str(exc))
+            answers = generate_answers(questions, profile_data)
+            for ans in answers:
+                qa = QuestionnaireAnswer(
+                    application_id=app_id,
+                    user_id=user_id,
+                    question_text=ans.question_text,
+                    question_type=ans.question_type,
+                    draft_answer=ans.draft_answer,
+                    confidence=ans.confidence,
+                    sources=ans.sources,
+                    rationale=ans.rationale,
+                    requires_review=ans.requires_review,
+                )
+                db.add(qa)
 
         app.status = "ready_for_review"
         await db.commit()
