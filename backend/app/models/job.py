@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import (
     Date, DateTime, ForeignKey, Index, Integer, SmallInteger, String, Text, UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from app.models.types import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base

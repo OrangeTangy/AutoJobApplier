@@ -69,6 +69,15 @@ logs/
 playwright-report/
 test-results/
 
+# ── Next.js static export ─────────────────────────────────────────────────────
+frontend/out/
+
+# ── PyInstaller ───────────────────────────────────────────────────────────────
+backend/build/
+backend/dist/
+*.manifest
+AutoJobApplier.spec~
+
 # ── Claude Code ───────────────────────────────────────────────────────────────
 .claude/settings.local.json
 

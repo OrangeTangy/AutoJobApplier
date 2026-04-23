@@ -1,43 +1,43 @@
 # AutoJobApplier
 
-A self-hosted job application assistant. Discovers jobs from your email or by URL, matches them to your best resume automatically, and handles Playwright-based form submission — with a mandatory human approval gate before anything is ever sent.
+A self-hosted job application assistant. Discovers jobs from your email or by URL, matches each one to your best resume automatically, and handles Playwright-based form submission — with a mandatory human approval gate before anything is ever sent.
 
-**No AI API key required.** Resume matching and job parsing use local TF-IDF similarity and regex — completely free to run.
+**No AI API key required.** Resume matching and job parsing use local TF-IDF similarity and regex — completely free to run. **No Docker, no terminal, no localhost URLs to remember.** Just download the release, double-click, and use it.
 
 ---
 
-## Quickstart
+## Download and run
 
-**Only requirement:** [Docker Desktop](https://docs.docker.com/get-docker/)
+Grab the latest release for your OS from the **[Releases page](../../releases/latest)** and extract it.
 
-### macOS / Linux
-```bash
-git clone https://github.com/OrangeTangy/AutoJobApplier.git
-cd AutoJobApplier
-bash setup.sh
-```
+| OS | File | How to run |
+|---|---|---|
+| Windows | `AutoJobApplier-windows.zip` | Unzip, then double-click **`AutoJobApplier.exe`** |
+| macOS | `AutoJobApplier-macos.zip` | Unzip, then double-click **`AutoJobApplier`** (first launch may require right-click → Open) |
+| Linux | `AutoJobApplier-linux.tar.gz` | `tar -xzf … && ./AutoJobApplier-linux/AutoJobApplier` |
 
-### Windows
-```
-git clone https://github.com/OrangeTangy/AutoJobApplier.git
-cd AutoJobApplier
-setup.bat
-```
+The app starts an embedded server, opens your browser to the UI, and shows a system-tray icon. Close from the tray to quit.
 
-That's it. The script generates random secrets, builds images, starts the stack, and waits until healthy.
+### First launch
+On first run the app downloads a Chromium build (~180 MB, one-time) so Playwright can fill out forms. Everything else is bundled.
 
-**Open http://localhost:3000**
+### Your data lives at
+- **Windows:** `%LOCALAPPDATA%\AutoJobApplier\`
+- **macOS:** `~/Library/Application Support/AutoJobApplier/`
+- **Linux:** `~/.local/share/AutoJobApplier/`
+
+That directory holds the SQLite database, uploaded resumes, screenshots, logs, and the Chromium install. Delete it to fully reset the app.
 
 ---
 
 ## First-time setup (inside the app)
 
-1. **Register** an account at `/register`
+1. **Register** an account when the app opens
 2. **Profile** → fill in work authorization, salary range, relocation preferences, work history
-3. **Resumes** → upload one or more `.tex` files (one per specialisation)
+3. **Resumes** → drag in one or more `.tex` files (one per specialisation)
 4. **Jobs** → paste a job URL, or go to Ingestion to import from Handshake / email
 
-The system automatically picks the best-matching resume for each job.
+The system auto-picks the best-matching resume for each job.
 
 ---
 
@@ -68,17 +68,17 @@ Job URL / Email / CSV
 - **Pauses on any CAPTCHA, MFA, or OTP** — does not attempt to bypass
 - **Respects robots.txt** — checked before any browser navigation
 - **Never fabricates** — questionnaire answers pulled directly from your profile
-- **Full audit log** — every action written to the database
+- **Full audit log** — every action written to the local database
 
 ---
 
 ## Resume library
 
-Upload `.tex` files at **Resumes → Add Resume**. Label each by focus area:
+Drop multiple `.tex` files in at **Resumes → Add Resume** and label each by focus area:
 
 | Label | Use case |
 |---|---|
-| `Backend Engineer — Python/AWS` | Python backend roles |
+| `Backend — Python/AWS` | Python backend roles |
 | `Data Scientist — ML/PyTorch` | ML/data science roles |
 | `Full-Stack — React/Node` | Full-stack web roles |
 
@@ -86,89 +86,90 @@ For each job, TF-IDF cosine similarity ranks every resume against the job descri
 
 ---
 
-## Job ingestion methods
+## Job ingestion
 
 | Method | Where |
 |---|---|
 | URL paste | Jobs page → paste any job posting URL |
 | Handshake CSV | Ingestion → Handshake CSV tab |
-| URL list | Ingestion → URL List tab (one URL per line) |
+| URL list | Ingestion → URL List tab (one per line) |
 | JSON array | Ingestion → JSON Import tab |
-| Email (IMAP) | Ingestion → Email Sources |
-| Email (Gmail) | Ingestion → Email Sources |
+| Email (IMAP) | Ingestion → Email Sources (hourly polling, in-process) |
+| Email (Gmail) | Ingestion → Email Sources (OAuth) |
+
+Email polling runs in the background every hour while the app is open.
 
 ---
 
-## Application workflow
+## Architecture (desktop mode)
 
-1. **Jobs list** — sorted by fit score (highest first)
-2. **Job detail** → "Start Application"
-3. **Draft** — resume auto-selected, questionnaire filled from your profile
-4. **Review** — inspect/edit every answer; cover letter in expandable panel
-5. **Approve** — locks answers, computes tamper-proof SHA-256 hash
-6. **Submit** — Playwright fills the form; screenshot taken before anything is sent
+```
+┌─────────────────────────────────────────────┐
+│            AutoJobApplier.exe               │
+├─────────────────────────────────────────────┤
+│   ┌──────────────┐    ┌──────────────┐     │
+│   │   Next.js    │◀──▶│   FastAPI    │     │
+│   │   (static)   │    │   (uvicorn)  │     │
+│   └──────────────┘    └──────┬───────┘     │
+│                              │              │
+│   ┌──────────────┐    ┌──────▼───────┐     │
+│   │    SQLite    │◀───│  Thread-pool │     │
+│   │  (aiosqlite) │    │  + scheduler │     │
+│   └──────────────┘    └──────────────┘     │
+│   ┌──────────────────────────────────┐     │
+│   │ Playwright (Chromium, on-demand) │     │
+│   └──────────────────────────────────┘     │
+└─────────────────────────────────────────────┘
+```
+
+**Backend:** Python 3.11, FastAPI, SQLAlchemy 2.0 async, Alembic
+**Queue:** In-process `ThreadPoolExecutor` + lightweight scheduler (no Redis/Celery)
+**Frontend:** Next.js 15 static export, TypeScript, React Query v5, Tailwind CSS
+**Submission:** Playwright/Chromium — adapters for Workday, Greenhouse, Lever, Ashby, Generic
+**Matching:** scikit-learn TF-IDF cosine similarity
+**Encryption:** Fernet (AES-128-CBC + HMAC) for sensitive DB columns
+**Auth:** JWT HS256 access + refresh tokens
 
 ---
 
-## Company rules
+## Build from source
 
-**Company Rules** → set blacklist / cooldown / allowlist per employer.
-
----
-
-## Commands
+You only need this if you want to modify the app. Otherwise just download the release.
 
 ```bash
-docker compose logs -f           # stream all logs
-docker compose down              # stop
-docker compose build && \
-  docker compose up -d           # rebuild after code changes
-docker compose exec backend \
-  alembic upgrade head           # run migrations manually
-docker compose exec backend \
-  pytest tests/ -v               # run tests
-docker compose down -v           # DANGER: wipe all data
+# Backend
+cd backend
+python3.11 -m venv .venv
+source .venv/bin/activate            # or .venv\Scripts\activate on Windows
+pip install -r requirements.txt
+playwright install chromium
+
+# Frontend (static export)
+cd ../frontend
+npm ci
+npm run build
+
+# Run the launcher
+cd ../backend
+python launcher.py
 ```
 
-Or with `make`: run `make help` to see all targets.
+To build a distributable bundle locally:
+
+```bash
+cd backend
+pip install pyinstaller
+pyinstaller autojobapplier.spec --noconfirm --clean
+# Output: backend/dist/AutoJobApplier/
+```
+
+GitHub Actions builds Windows + macOS + Linux on every tagged push — see `.github/workflows/release.yml`. Tag a commit `vX.Y.Z` and the three installers publish to a GitHub Release automatically.
 
 ---
 
-## Configuration
+## Server mode (Docker, optional)
 
-`.env` is auto-generated by `setup.sh`. The only values you'd change:
-
-| Variable | Notes |
-|---|---|
-| `ENVIRONMENT` | Set to `production` to disable `/docs` |
-| `ANTHROPIC_API_KEY` | Optional — leave blank, not required |
-| `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` | Only for Gmail OAuth ingestion |
-
----
-
-## Architecture
-
-```
-┌─────────────┐   ┌─────────────┐   ┌──────────────┐   ┌──────────────┐
-│  Next.js    │   │  FastAPI    │   │  PostgreSQL   │   │  Redis       │
-│  :3000      │──▶│  :8000      │──▶│  :5432        │   │  :6379       │
-└─────────────┘   └─────────────┘   └──────────────┘   └──────────────┘
-                         │                                      │
-                  ┌──────▼──────┐                       ┌──────▼──────┐
-                  │  Celery     │                       │  Celery     │
-                  │  Worker     │                       │  Beat       │
-                  │  (Playwright│                       │  (polling)  │
-                  │   + jobs)   │                       │             │
-                  └─────────────┘                       └─────────────┘
-```
-
-**Backend:** Python 3.11, FastAPI, SQLAlchemy 2.0 async, Alembic  
-**Queue:** Celery + Redis (4 queues: default / ingestion / generation / submission)  
-**Frontend:** Next.js 15, TypeScript, React Query v5, Tailwind CSS  
-**Submission:** Playwright/Chromium — adapters for Workday, Greenhouse, Lever, Ashby, Generic  
-**Matching:** scikit-learn TF-IDF cosine similarity  
-**Encryption:** Fernet (AES-128-CBC + HMAC) for sensitive columns  
-**Auth:** JWT HS256 access tokens + refresh tokens  
+If you want a multi-user Postgres/Redis deployment instead of a single-user desktop app, the original Docker Compose stack is still available — see `docker-compose.yml` and `docker-compose.prod.yml`. Uncomment the Postgres/Redis/Celery lines in `backend/requirements.txt` before building.
 
 ---
 

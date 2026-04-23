@@ -5,9 +5,8 @@ python-multipart==0.0.17
 
 # ── Database ──────────────────────────────────────────────────────────────────
 sqlalchemy[asyncio]==2.0.36
-asyncpg==0.30.0
+aiosqlite==0.20.0
 alembic==1.14.0
-psycopg2-binary==2.9.10
 
 # ── Auth & Security ────────────────────────────────────────────────────────────
 passlib[bcrypt]==1.7.4
@@ -25,11 +24,6 @@ scipy==1.14.1
 
 # ── LLM (optional — not required for core functionality) ─────────────────────
 # anthropic==0.40.0   # Uncomment only if you want LLM-based cover letters
-
-# ── Queue / Workers ────────────────────────────────────────────────────────────
-celery[redis]==5.4.0
-redis==5.2.1
-kombu==5.4.2
 
 # ── HTTP / Scraping ────────────────────────────────────────────────────────────
 httpx==0.28.1
@@ -59,9 +53,22 @@ tenacity==9.0.0
 orjson==3.10.12
 aiofiles==24.1.0
 
+# ── Desktop launcher ──────────────────────────────────────────────────────────
+pystray==0.19.5
+pillow==11.0.0
+
+# ── Optional: PostgreSQL support (not installed in desktop builds) ───────────
+# Uncomment these if running a server-mode Postgres deployment:
+# asyncpg==0.30.0
+# psycopg2-binary==2.9.10
+
+# ── Optional: Celery + Redis (server-mode only) ──────────────────────────────
+# celery[redis]==5.4.0
+# redis==5.2.1
+# kombu==5.4.2
+
 # ── Testing ───────────────────────────────────────────────────────────────────
 pytest==8.3.4
 pytest-asyncio==0.24.0
 pytest-cov==6.0.0
-httpx==0.28.1
 factory-boy==3.3.1

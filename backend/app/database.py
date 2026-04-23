@@ -9,13 +9,29 @@ from app.config import get_settings
 
 settings = get_settings()
 
-engine = create_async_engine(
-    settings.database_url,
-    pool_size=settings.db_pool_size,
-    max_overflow=settings.db_max_overflow,
-    echo=settings.debug,
-    pool_pre_ping=True,
-)
+
+def _build_engine():
+    """Build an async engine appropriate for the configured backend.
+
+    SQLite's aiosqlite driver doesn't accept pool_size/max_overflow; pass
+    connect_args to enable shared-cache access and foreign keys instead.
+    """
+    if settings.is_sqlite:
+        return create_async_engine(
+            settings.database_url,
+            echo=settings.debug,
+            connect_args={"check_same_thread": False, "timeout": 30},
+        )
+    return create_async_engine(
+        settings.database_url,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        echo=settings.debug,
+        pool_pre_ping=True,
+    )
+
+
+engine = _build_engine()
 
 AsyncSessionLocal = async_sessionmaker(
     engine,
@@ -39,3 +55,19 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             raise
         finally:
             await session.close()
+
+
+async def enable_sqlite_fks() -> None:
+    """Enable foreign_keys PRAGMA for every new SQLite connection."""
+    if not settings.is_sqlite:
+        return
+    from sqlalchemy import event
+
+    sync_engine = engine.sync_engine
+
+    @event.listens_for(sync_engine, "connect")
+    def _set_sqlite_pragma(dbapi_conn, _conn_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.close()

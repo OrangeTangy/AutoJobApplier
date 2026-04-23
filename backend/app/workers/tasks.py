@@ -7,20 +7,19 @@ longer-running or scheduled operations.
 """
 from __future__ import annotations
 
-import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import structlog
 
-from app.workers.celery_app import celery
+from app.workers.celery_app import celery, run_coro_blocking
 
 logger = structlog.get_logger(__name__)
 
 
 def _run(coro):
-    """Run an async coroutine in a Celery task."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    """Run an async coroutine from inside a worker thread."""
+    return run_coro_blocking(coro)
 
 
 @celery.task(name="app.workers.tasks.poll_all_sources", bind=True, max_retries=3)

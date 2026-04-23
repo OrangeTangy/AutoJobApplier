@@ -9,7 +9,9 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from app.config import get_settings
 from app.database import Base
+
 # Import all models so Alembic can discover them
 import app.models  # noqa: F401
 
@@ -18,12 +20,10 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Override URL from environment
-database_url = os.environ.get("DATABASE_URL", "")
-# Alembic needs sync URL for migrations
-sync_url = database_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
-if sync_url:
-    config.set_main_option("sqlalchemy.url", sync_url)
+# Prefer the running app's configured URL so desktop SQLite is picked up
+database_url = os.environ.get("DATABASE_URL") or get_settings().database_url
+# Alembic needs an async-capable URL; keep aiosqlite / asyncpg as-is
+config.set_main_option("sqlalchemy.url", database_url)
 
 target_metadata = Base.metadata
 
@@ -35,13 +35,18 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        render_as_batch=url.startswith("sqlite"),
     )
     with context.begin_transaction():
         context.run_migrations()
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        render_as_batch=connection.dialect.name == "sqlite",
+    )
     with context.begin_transaction():
         context.run_migrations()
 

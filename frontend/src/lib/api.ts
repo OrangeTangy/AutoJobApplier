@@ -1,7 +1,10 @@
 import axios, { AxiosError, AxiosInstance } from "axios";
 import { Application, Job, PaginatedJobs, Resume, TokenResponse, User, UserProfile } from "@/types";
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// Default to same-origin ("") so the bundled desktop app talks to its
+// embedded FastAPI server. Override at build time for split-origin deploys
+// via NEXT_PUBLIC_API_URL.
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 const API_PREFIX = "/api/v1";
 
 function createClient(): AxiosInstance {
