@@ -204,16 +204,31 @@ def create_app() -> FastAPI:
         async def serve_spa(full_path: str):
             # Let API & metrics routes win (FastAPI matches them first); this
             # handler only fires for paths that didn't match a router.
-            target = frontend / full_path
-            if full_path and target.is_file():
+            path = full_path.strip("/")
+
+            # 1) Exact file hit (e.g. _next assets, favicon, image).
+            target = frontend / path
+            if path and target.is_file():
                 return FileResponse(str(target))
-            # Try matching a pre-exported HTML page (e.g. jobs/[id].html)
-            html_candidate = frontend / f"{full_path}.html"
-            if full_path and html_candidate.is_file():
-                return FileResponse(str(html_candidate))
+
+            # 2) Pre-exported page: "foo/bar" → "foo/bar/index.html" (trailingSlash=true)
+            page_html = frontend / path / "index.html"
+            if path and page_html.is_file():
+                return FileResponse(str(page_html))
+
+            # 3) Dynamic [id] fallback: "applications/<uuid>" → "applications/_/index.html".
+            # Client reads the real id from window.location via useParams().
+            parts = path.split("/")
+            if len(parts) >= 2:
+                placeholder = frontend / parts[0] / "_" / "index.html"
+                if placeholder.is_file():
+                    return FileResponse(str(placeholder))
+
+            # 4) Root SPA shell.
             index = frontend / "index.html"
             if index.is_file():
                 return FileResponse(str(index))
+
             return JSONResponse(
                 status_code=404, content={"detail": "Frontend not bundled"}
             )

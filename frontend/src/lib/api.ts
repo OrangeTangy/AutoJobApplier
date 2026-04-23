@@ -58,6 +58,7 @@ function createClient(): AxiosInstance {
 }
 
 export const api = createClient();
+export const apiClient = api;
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 export const authApi = {
